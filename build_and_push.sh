@@ -3,17 +3,27 @@
 
 set -e
 
-# Read variables from terraform.tfvars if it exists
+# Initialize variables with defaults
+REGION="europe-west1"
+REPO_NAME="tams-repo"
+PROJECT_ID=""
+
+# Read variables from terraform/terraform.tfvars if it exists
 if [ -f terraform/terraform.tfvars ]; then
-    PROJECT_ID=$(grep project_id terraform/terraform.tfvars | cut -d'=' -f2 | tr -d ' "')
-    REGION=$(grep region terraform/terraform.tfvars | cut -d'=' -f2 | tr -d ' "')
-    REPO_NAME=$(grep repository_name terraform/terraform.tfvars | cut -d'=' -f2 | tr -d ' "')
+    # Use || true to prevent set -e from failing if grep finds nothing
+    PROJECT_ID=$(grep project_id terraform/terraform.tfvars | cut -d'=' -f2 | tr -d ' "' || true)
+    
+    TF_REGION=$(grep region terraform/terraform.tfvars | cut -d'=' -f2 | tr -d ' "' || true)
+    [ -n "$TF_REGION" ] && REGION=$TF_REGION
+    
+    TF_REPO=$(grep repository_name terraform/terraform.tfvars | cut -d'=' -f2 | tr -d ' "' || true)
+    [ -n "$TF_REPO" ] && REPO_NAME=$TF_REPO
 fi
 
-# Fallback to defaults if not found
-PROJECT_ID=${PROJECT_ID:-$(gcloud config get-value project)}
-REGION=${REGION:-"europe-west1"}
-REPO_NAME=${REPO_NAME:-"tams-repo"}
+# Fallback for PROJECT_ID if not set in tfvars
+if [ -z "$PROJECT_ID" ]; then
+    PROJECT_ID=$(gcloud config get-value project)
+fi
 
 echo "Using Project: $PROJECT_ID"
 echo "Using Region: $REGION"

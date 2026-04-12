@@ -33,7 +33,7 @@ We use a two-stage deployment process to handle the container image dependency.
     ```bash
     cd terraform
     ```
-2.  Copy `terraform.tfvars.example` to `terraform.tfvars` and fill in your variables:
+2.  Copy `terraform.tfvars.example` to `terraform.tfvars` and set the variables according to your environment:
     ```bash
     cp terraform.tfvars.example terraform.tfvars
     ```

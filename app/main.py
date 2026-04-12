@@ -11,7 +11,7 @@ from mediatimestamp.immutable import TimeRange
 
 app = FastAPI(title="TAMS API on GCP")
 
-db = firestore.Client()
+db = firestore.Client(database=os.environ.get("FIRESTORE_DB_NAME", "(default)"))
 
 @app.get("/")
 def read_root():

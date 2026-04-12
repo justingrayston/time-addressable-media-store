@@ -3,8 +3,8 @@ output "cloud_run_url" {
 }
 
 output "build_command" {
-  value = "gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/${var.repository_name}/tams-api:latest ."
-  description = "Run this command from the root of the repository to build and push the real image."
+  value = "./build_and_push.sh"
+  description = "Run this script from the root of the repository to build and push the real image."
 }
 
 output "curl_test_command" {

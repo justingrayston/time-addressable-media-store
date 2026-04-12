@@ -100,6 +100,10 @@ resource "google_cloud_run_service" "tams_api" {
           name  = "BUCKET_NAME"
           value = google_storage_bucket.tams_bucket.name
         }
+        env {
+          name  = "FIRESTORE_DB_NAME"
+          value = var.firestore_db_name
+        }
       }
       service_account_name = google_service_account.tams_sa.email
     }
