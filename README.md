@@ -9,26 +9,9 @@ This repository contains the Google Cloud Platform (GCP) implementation of the B
 
 ## Getting Started
 
-### Running Locally
-To run the API locally for development:
-1.  Install dependencies:
-    ```bash
-    pip install -r requirements.txt
-    ```
-2.  Set environment variables (if needed, e.g., for pointing to a real bucket):
-    ```bash
-    export BUCKET_NAME="your-bucket-name"
-    ```
-3.  Run Uvicorn:
-    ```bash
-    uvicorn app.main:app --reload
-    ```
+We use a two-stage deployment process to handle the container image dependency for Cloud Run. You can also run the application locally after the initial infrastructure is set up.
 
-### Deployment with Terraform
-
-We use a two-stage deployment process to handle the container image dependency.
-
-#### Stage 1: Infrastructure Setup
+### Stage 1: Infrastructure Setup
 1.  Navigate to the `terraform` directory:
     ```bash
     cd terraform
@@ -42,9 +25,24 @@ We use a two-stage deployment process to handle the container image dependency.
     terraform init
     terraform apply
     ```
-    *Note: This will deploy Cloud Run with a dummy image initially.*
+    *Note: This will deploy Cloud Run with a dummy image initially, but it will set up the Firestore database and GCS bucket needed for the API.*
 
-#### Stage 2: Build and Deploy Real Image
+### Running Locally
+Once Stage 1 is complete and the Firestore database is created, you can run the API locally for development:
+1.  Install dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+2.  Set environment variables (e.g., for pointing to the real bucket created by Terraform):
+    ```bash
+    export BUCKET_NAME="your-bucket-name"
+    ```
+3.  Run Uvicorn:
+    ```bash
+    uvicorn app.main:app --reload
+    ```
+
+### Stage 2: Build and Deploy Real Image
 1.  Return to the root directory and run the build script:
     ```bash
     cd ..
@@ -57,5 +55,20 @@ We use a two-stage deployment process to handle the container image dependency.
     terraform apply
     ```
 
+## Testing the API
+
+After successful deployment, Terraform will output a `curl_test_command`. You can use it to verify the API is working:
+
+```bash
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" https://<CLOUD_RUN_URL>/service
+```
+
+## Running Examples
+
+Once the API is running on Cloud Run, you can use the example scripts in the `examples/` directory to ingest and outgest content. 
+
+See the [examples/README.md](examples/README.md) for detailed instructions on how to run them.
+
 ## License
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+
