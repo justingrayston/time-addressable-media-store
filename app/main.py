@@ -6,12 +6,40 @@ from google.cloud import storage
 import datetime
 import uuid
 import os
+import re
+import base64
+import hashlib
+import logging
+from cryptography.fernet import Fernet
 from mediatimestamp.immutable import TimeRange
 
 
 app = FastAPI(title="TAMS API on GCP")
 
 db = firestore.Client(database=os.environ.get("FIRESTORE_DB_NAME", "(default)"))
+
+logger = logging.getLogger(__name__)
+
+UUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+TAG_NAME_REGEX = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+# Setup Fernet Encryption for Webhook API Keys
+encryption_key = os.environ.get("WEBHOOK_ENCRYPTION_KEY")
+if encryption_key:
+    try:
+        # Generate valid 32-byte Fernet key from the user key using SHA-256
+        key_bytes = base64.urlsafe_b64encode(hashlib.sha256(encryption_key.encode()).digest())
+        fernet = Fernet(key_bytes)
+    except Exception as e:
+        logger.error(f"Failed to initialize Fernet with WEBHOOK_ENCRYPTION_KEY: {e}")
+        fallback_seed = os.environ.get("FIRESTORE_DB_NAME", "(default)")
+        key_bytes = base64.urlsafe_b64encode(hashlib.sha256(fallback_seed.encode()).digest())
+        fernet = Fernet(key_bytes)
+else:
+    logger.warning("WEBHOOK_ENCRYPTION_KEY environment variable not set. Webhook keys will be encrypted using a transient key derived from FIRESTORE_DB_NAME.")
+    fallback_seed = os.environ.get("FIRESTORE_DB_NAME", "(default)")
+    key_bytes = base64.urlsafe_b64encode(hashlib.sha256(fallback_seed.encode()).digest())
+    fernet = Fernet(key_bytes)
 
 @app.get("/")
 def read_root():
@@ -110,6 +138,10 @@ def put_source_tag(sourceId: str, name: str, value: str | List[str] = Body(...))
     doc = doc_ref.get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Source not found")
+    
+    if not TAG_NAME_REGEX.match(name):
+        raise HTTPException(status_code=400, detail="Invalid tag name format. Must be alphanumeric, underscores or hyphens.")
+        
     doc_ref.update({f"tags.{name}": value})
     return
 
@@ -119,6 +151,10 @@ def delete_source_tag(sourceId: str, name: str):
     doc = doc_ref.get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Source not found")
+        
+    if not TAG_NAME_REGEX.match(name):
+        raise HTTPException(status_code=400, detail="Invalid tag name format. Must be alphanumeric, underscores or hyphens.")
+        
     doc_ref.update({f"tags.{name}": firestore.DELETE_FIELD})
     return
 
@@ -196,23 +232,28 @@ def create_flow_segments(flowId: str, segments: Union[FlowSegmentPost, List[Flow
     failed_segments = []
     for seg in segments:
         try:
+            # Validate object_id format to prevent GCS signed URL path traversal
+            if not UUID_REGEX.match(seg.object_id):
+                failed_segments.append({
+                    "object_id": seg.object_id,
+                    "timerange": seg.timerange,
+                    "error": "Invalid object_id format. Must be a valid canonical UUID."
+                })
+                continue
+
             tr = TimeRange.from_str(seg.timerange)
             start_ns = tr.start.to_nanosec() + (0 if tr.includes_start() else 1)
             end_ns = tr.end.to_nanosec() - (0 if tr.includes_end() else 1)
             
-            # Check for overlaps in Firestore
-            # We do filtering in memory to avoid needing a composite index
-            all_segments = db.collection("segments")\
+            # Check for overlaps directly in Firestore using our composite index
+            overlapping_query = db.collection("segments")\
                 .where("flow_id", "==", flowId)\
-                .get()
+                .where("timerange_start", "<=", end_ns)\
+                .where("timerange_end", ">=", start_ns)\
+                .limit(1)\
+                .stream()
             
-            is_overlap = False
-            for doc in all_segments:
-                data = doc.to_dict()
-                if data["timerange_start"] <= end_ns and data["timerange_end"] >= start_ns:
-                    is_overlap = True
-                    break
-
+            is_overlap = next(overlapping_query, None) is not None
             
             if is_overlap:
                 failed_segments.append({
@@ -247,26 +288,23 @@ def create_flow_segments(flowId: str, segments: Union[FlowSegmentPost, List[Flow
 def get_flow_segments(flowId: str, timerange: Optional[str] = None, limit: Optional[int] = 100, presigned: bool = False):
     query = db.collection("segments").where("flow_id", "==", flowId)
     
-    docs = query.get()
-    segments = []
-    for doc in docs:
-        segments.append(doc.to_dict())
-        
     if timerange:
         try:
             tr = TimeRange.from_str(timerange)
             start_ns = tr.start.to_nanosec() + (0 if tr.includes_start() else 1)
             end_ns = tr.end.to_nanosec() - (0 if tr.includes_end() else 1)
             
-            filtered_segments = []
-            for seg in segments:
-                if seg["timerange_start"] <= end_ns and seg["timerange_end"] >= start_ns:
-                    filtered_segments.append(seg)
-            segments = filtered_segments
+            query = query.where("timerange_start", "<=", end_ns).where("timerange_end", ">=", start_ns)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid timerange parameter: {e}")
             
-    segments = segments[:limit]
+    if limit is not None:
+        query = query.limit(limit)
+        
+    docs = query.get()
+    segments = []
+    for doc in docs:
+        segments.append(doc.to_dict())
     
     if presigned and segments:
         bucket_name = os.environ.get("TAMS_BUCKET_NAME", "tams-objects-bucket")
@@ -309,25 +347,19 @@ def get_flow_segments(flowId: str, timerange: Optional[str] = None, limit: Optio
 @app.delete("/flows/{flowId}/segments", status_code=204)
 def delete_flow_segments(flowId: str, timerange: Optional[str] = None):
     query = db.collection("segments").where("flow_id", "==", flowId)
-    docs = query.get()
     
-    if not timerange:
-        for doc in docs:
-            doc.reference.delete()
-        return
-        
-    try:
-        tr = TimeRange.from_str(timerange)
-        start_ns = tr.start.to_nanosec() + (0 if tr.includes_start() else 1)
-        end_ns = tr.end.to_nanosec() - (0 if tr.includes_end() else 1)
-        
-        for doc in docs:
-            data = doc.to_dict()
-            if data["timerange_start"] >= start_ns and data["timerange_end"] <= end_ns:
-                doc.reference.delete()
-                
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid timerange parameter: {e}")
+    if timerange:
+        try:
+            tr = TimeRange.from_str(timerange)
+            start_ns = tr.start.to_nanosec() + (0 if tr.includes_start() else 1)
+            end_ns = tr.end.to_nanosec() - (0 if tr.includes_end() else 1)
+            
+            query = query.where("timerange_start", ">=", start_ns).where("timerange_end", "<=", end_ns)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid timerange parameter: {e}")
+            
+    for doc in query.stream():
+        doc.reference.delete()
         
     return
 
@@ -361,6 +393,11 @@ def create_webhook(webhook: WebhookPost):
     webhook_data["id"] = webhook_id
     webhook_data["status"] = "started"
     
+    # Encrypt api_key_value to protect secrets in Cloud Firestore
+    if webhook_data.get("api_key_value"):
+        encrypted_val = fernet.encrypt(webhook_data["api_key_value"].encode()).decode()
+        webhook_data["api_key_value"] = encrypted_val
+        
     db.collection("webhooks").document(webhook_id).set(webhook_data)
     
     return Webhook(**webhook_data)
@@ -392,6 +429,11 @@ def update_webhook(webhookId: str, webhook: WebhookPost):
     webhook_data["id"] = webhookId
     webhook_data["status"] = "started"
     
+    # Encrypt api_key_value to protect secrets in Cloud Firestore
+    if webhook_data.get("api_key_value"):
+        encrypted_val = fernet.encrypt(webhook_data["api_key_value"].encode()).decode()
+        webhook_data["api_key_value"] = encrypted_val
+        
     doc_ref.update(webhook_data)
     
     return Webhook(**webhook_data)

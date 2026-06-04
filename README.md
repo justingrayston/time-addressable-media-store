@@ -35,12 +35,29 @@ Once Stage 1 is complete and the Firestore database is created, you can run the 
     ```
 2.  Set environment variables (e.g., for pointing to the real bucket created by Terraform):
     ```bash
-    export BUCKET_NAME="your-bucket-name"
+    export TAMS_BUCKET_NAME="your-bucket-name"
     ```
 3.  Run Uvicorn:
     ```bash
     uvicorn app.main:app --reload
     ```
+
+## Local Testing & Quality Assurance
+
+A comprehensive, production-grade test suite using `pytest` is included to verify code correctness, TAMS API specification compliance, and security mitigations without requiring any live GCP credentials. All GCP services (Cloud Firestore, Cloud Storage, and Google Authentication) are fully mocked and run statefully in-memory.
+
+To run the test suite and check code coverage locally:
+
+1. **Activate the Virtual Environment**:
+   ```bash
+   source venv/bin/activate
+   ```
+2. **Execute Pytest**:
+   ```bash
+   PYTHONPATH=. pytest tests/ -v --cov=app --cov-report=term-missing
+   ```
+
+Our target code coverage is **97%+** across all application logic. Every modification must be validated by running this suite.
 
 ### Stage 2: Build and Deploy Real Image
 1.  Return to the root directory and run the build script:

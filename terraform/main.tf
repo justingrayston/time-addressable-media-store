@@ -55,10 +55,10 @@ resource "google_service_account" "tams_sa" {
 }
 
 # IAM Roles
-resource "google_project_iam_member" "storage_admin" {
-  project = var.project_id
-  role    = "roles/storage.objectAdmin"
-  member  = "serviceAccount:${google_service_account.tams_sa.email}"
+resource "google_storage_bucket_iam_member" "storage_admin" {
+  bucket = google_storage_bucket.tams_bucket.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.tams_sa.email}"
 }
 
 resource "google_project_iam_member" "datastore_user" {
@@ -82,6 +82,28 @@ resource "google_firestore_database" "tams_db" {
   type        = "FIRESTORE_NATIVE"
 }
 
+# Firestore Composite Index for Segments Query Optimization
+resource "google_firestore_index" "segments_index" {
+  project    = var.project_id
+  database   = google_firestore_database.tams_db.name
+  collection = "segments"
+
+  fields {
+    field_path = "flow_id"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "timerange_start"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "timerange_end"
+    order      = "ASCENDING"
+  }
+}
+
 # Cloud Run Service
 resource "google_cloud_run_service" "tams_api" {
   depends_on = [google_project_service.run_api, google_firestore_database.tams_db]
@@ -97,7 +119,7 @@ resource "google_cloud_run_service" "tams_api" {
           value = google_service_account.tams_sa.email
         }
         env {
-          name  = "BUCKET_NAME"
+          name  = "TAMS_BUCKET_NAME"
           value = google_storage_bucket.tams_bucket.name
         }
         env {

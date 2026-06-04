@@ -7,6 +7,8 @@ import jwt
 from jwt import PyJWKClient, InvalidSignatureError, ExpiredSignatureError
 
 GROUPS_CLAIM = os.environ.get("GROUPS_CLAIM", "cognito:groups")
+EXPECTED_AUDIENCE = os.environ.get("OAUTH2_AUDIENCE")
+EXPECTED_ISSUER = os.environ.get("OAUTH2_ISSUER")
 
 
 def get_signing_key(jwks_url: str):
@@ -26,7 +28,13 @@ def verify_token(request: sanic.Request, jwks_client: PyJWKClient) -> dict:
     signing_key = jwks_client.get_signing_key_from_jwt(token)
 
     try:
-        token_decoded = jwt.decode(token, signing_key, algorithms=["RS256"])
+        token_decoded = jwt.decode(
+            token,
+            signing_key,
+            algorithms=["RS256"],
+            audience=EXPECTED_AUDIENCE,
+            issuer=EXPECTED_ISSUER
+        )
     except InvalidSignatureError as e:
         logger.exception(e)
         raise Unauthorized()
